@@ -138,7 +138,7 @@ void loop(){
           //if that succeeded, then val should not be NAN.
           if(val != NAN)
           {
-            //...aaaand set it to the filter depth variable.
+            //...aaaand set it to the PPR variable
             _pulsePerRev = parameter.toInt();
           }
         }
