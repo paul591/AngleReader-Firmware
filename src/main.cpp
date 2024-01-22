@@ -1,14 +1,23 @@
 #include <ESP32Encoder.h>
+#include "Preferences.h"
 
 //instance of the encode object
 ESP32Encoder _encoder;
 //long to keep track of microseconds;
 unsigned long _previousTime = millis();
-unsigned long _loopInterval = 10;
+unsigned long _loopInterval = 100;
 unsigned long _pulsePerRev = 1200;
 unsigned long _rpmFilterDepth = 5;
 
+//Used to store settings in non-volatile flash on the ESP32.
+Preferences prefs;
+
 #define ENCODER_PWR 16
+
+#define PREFS_NAMESPACE "AngleReader"
+#define PREFS_LOOP_INTERVAL "LoopInterval"
+#define PREFS_PULSE_PER_REV "PulsePerRev"
+#define PREFS_RPM_FILTER_DEPTH "RpmFilterDepth"
 
 void setup(){
 	
@@ -31,8 +40,36 @@ void setup(){
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(ENCODER_PWR, OUTPUT);
 
+
+  //First thing, is to grab the preferences out of flash.
+  prefs.begin("AngleReader");
+
+  long loopInterval = prefs.getLong(PREFS_LOOP_INTERVAL);
+  if(loopInterval != 0)
+    _loopInterval = loopInterval;
+
+  long pulsePerRev = prefs.getLong(PREFS_PULSE_PER_REV);
+  if(pulsePerRev != 0)
+    _pulsePerRev = pulsePerRev;
+
+  long rpmFilterDepth = prefs.getLong(PREFS_RPM_FILTER_DEPTH);
+  if(rpmFilterDepth != 0)
+    _rpmFilterDepth = rpmFilterDepth;
+
+  Serial.println();
+  Serial.println("--------Loading Settings from flash ---------");
+  Serial.print("Loop Interval: ");
+  Serial.println(_loopInterval);
+  Serial.print("Pulse Per Rev (Half Quadrature): ");
+  Serial.println(_pulsePerRev);
+  Serial.print("RPM Filter Depth: ");
+  Serial.println(_rpmFilterDepth);
+  Serial.println("----------------------------------------------");
+  Serial.println();
+  prefs.end();
+
+
   digitalWrite(ENCODER_PWR, HIGH);
-  Serial.println("AngleReader Ready.");
   
   //Flash the LED, basically just to tell me that we have got to this point 
   //in the setup.
@@ -40,7 +77,7 @@ void setup(){
   delay(1000);                      // wait for a second
   digitalWrite(LED_BUILTIN, LOW);   // turn the LED off by making the voltage LOW
   delay(1000);  
-
+  Serial.println("v0.2");
   Serial.println("LoftSoft AngleReader Ready.");
 }
 
@@ -107,11 +144,13 @@ void loop(){
       //Is it a Reset?
       if(commandChar == 'R')
       {
+          Serial.println("Received Reset Command");
           //Yes it is! Reset the encoder count.
           ResetEncoder(0);
       }
       else if(commandChar == 'F')
       {
+        prefs.begin(PREFS_NAMESPACE);
         //This is an RPM filter depth command;
         //This should have a parameter with it, to say what the filter
         //depth is..
@@ -124,12 +163,19 @@ void loop(){
           {
             //...aaaand set it to the filter depth variable.
             _rpmFilterDepth = parameter.toInt();
+            //and to flash
+            prefs.begin(PREFS_NAMESPACE);
+            prefs.putLong(PREFS_RPM_FILTER_DEPTH, _rpmFilterDepth);
+            prefs.end();
+            Serial.print("Received Filter Command: ");
+            Serial.println(_rpmFilterDepth);
           }
         }
       }
       else if(commandChar == 'P')
       {
-        //This is a Pulse Per Rev setting commandcommand;
+        prefs.begin(PREFS_NAMESPACE);
+        //This is a Pulse Per Rev setting command;
         //This should have a parameter with it,
         if(parameter.length() > 0)
         {
@@ -140,6 +186,35 @@ void loop(){
           {
             //...aaaand set it to the PPR variable
             _pulsePerRev = parameter.toInt();
+            //and to flash
+            prefs.begin(PREFS_NAMESPACE);
+            prefs.putLong(PREFS_PULSE_PER_REV, _pulsePerRev);
+            prefs.end(); 
+            Serial.print("Received PPR Command: ");
+            Serial.println(_pulsePerRev);
+          }
+        }
+      }
+      else if(commandChar == 'L')
+      {
+        prefs.begin(PREFS_NAMESPACE);
+        //This is a Loop Interval setting command;
+        //This should have a parameter with it,
+        if(parameter.length() > 0)
+        {
+          //good - now lets see if we can parse it to a numeric value..
+          int val = parameter.toInt();
+          //if that succeeded, then val should not be NAN.
+          if(val != NAN)
+          {
+            //...aaaand set it to the PPR variable
+            _loopInterval = parameter.toInt();
+            //and to flash
+            prefs.begin(PREFS_NAMESPACE);
+            prefs.putLong(PREFS_LOOP_INTERVAL, _loopInterval);
+            prefs.end(); 
+            Serial.print("Received Loop Interval Command: ");
+            Serial.println(_loopInterval);
           }
         }
       }
