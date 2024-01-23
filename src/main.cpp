@@ -12,13 +12,22 @@ unsigned long _rpmFilterDepth = 5;
 //Used to store settings in non-volatile flash on the ESP32.
 Preferences prefs;
 
-#define ENCODER_PWR 16
-
 #define PREFS_NAMESPACE "AngleReader"
 #define PREFS_LOOP_INTERVAL "LoopInterval"
 #define PREFS_PULSE_PER_REV "PulsePerRev"
 #define PREFS_RPM_FILTER_DEPTH "RpmFilterDepth"
 
+//Test mode.  If this is enabled, the main loop will increment 
+//the encoder in the loop.  Dont use this when connected with a 
+//real encoder, the results will be all over the place.
+bool _testMode = false;
+
+//just reset flag.  We use this to zero the RPM immediately
+//if we have done an encoder reset to a value, so that the
+//RPM doesnt spike when this occurs.
+bool _justReset = false;
+
+/// @brief Main Setup up pfunction called on chip start.
 void setup(){
 	
   //Usual serial setup.  Use 115200, because we need
@@ -38,8 +47,6 @@ void setup(){
   //Short delay to allow the serial port to sort itself out.
   delay(3000);
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(ENCODER_PWR, OUTPUT);
-
 
   //First thing, is to grab the preferences out of flash.
   prefs.begin("AngleReader");
@@ -56,21 +63,21 @@ void setup(){
   if(rpmFilterDepth != 0)
     _rpmFilterDepth = rpmFilterDepth;
 
+  //Having got the preferences from flash memory, just echo them out onto the
+  //serial line so we can observe them, if the log window is open.  The software
+  //will not try and parse these.  To retreive the params later, use the 'S' command
+  //described later in the line received delegate.
   Serial.println();
-  Serial.println("--------Loading Settings from flash ---------");
+  Serial.println("Loading Settings from flash");
   Serial.print("Loop Interval: ");
   Serial.println(_loopInterval);
   Serial.print("Pulse Per Rev (Half Quadrature): ");
   Serial.println(_pulsePerRev);
   Serial.print("RPM Filter Depth: ");
   Serial.println(_rpmFilterDepth);
-  Serial.println("----------------------------------------------");
   Serial.println();
   prefs.end();
 
-
-  digitalWrite(ENCODER_PWR, HIGH);
-  
   //Flash the LED, basically just to tell me that we have got to this point 
   //in the setup.
   digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on (HIGH is the voltage level)
@@ -81,11 +88,15 @@ void setup(){
   Serial.println("LoftSoft AngleReader Ready.");
 }
 
+/// @brief Reset the encoder value to the parameter value.
+/// @param val The long pos val of the enocder to be set to.
 void ResetEncoder(long val)
 {
   _encoder.setCount(val);
 }
 
+/// @brief A quick toggle of the LED on the built in pin.  This is blocking so
+/// only use in Setup() or when the loop period is not critical.
 void FlashLED()
 {
   digitalWrite(LED_BUILTIN, HIGH);  // turn the LED on (HIGH is the voltage level)
@@ -94,9 +105,9 @@ void FlashLED()
   delay(200);  
 }
 
-//Main Loop - free running, but interesting stuff is limited
-//by time slicing - check my #define at the top to see the
-//the timing rate in ms.
+/// @brief Main Loop - free running, but interesting stuff is limited
+/// by time slicing - check my #define at the top to see the
+/// the timing rate in ms.
 void loop(){
 
   unsigned long currentTime = millis();
@@ -145,8 +156,34 @@ void loop(){
       if(commandChar == 'R')
       {
           Serial.println("Received Reset Command");
+
           //Yes it is! Reset the encoder count.
-          ResetEncoder(0);
+          if(parameter.length() > 0)
+          {
+            //we have an angle, to use as the reset value, so now
+            //we need to do some math.
+            
+            long resetAngle = parameter.toInt();
+            long resetPos = (long)resetAngle * (((float)_pulsePerRev) / 360.0f);
+            
+            //Dump this text to the serial port to see the results.
+            Serial.print("Resetting encoder to ");
+            Serial.print(resetAngle);
+            Serial.print(" deg. Pos: ");
+            Serial.print(resetPos);
+            Serial.print(" of ");
+            Serial.println(_pulsePerRev);
+
+            ResetEncoder(resetPos);
+          }
+          else
+          {
+            //no parameter sent with the reset, so just plain old
+            //reset to 0.
+            Serial.println("Resetting encoder to 0");
+            ResetEncoder(0);
+          }            
+          _justReset = true;
       }
       else if(commandChar == 'F')
       {
@@ -218,11 +255,44 @@ void loop(){
           }
         }
       }
+      else if(commandChar=='S')
+      {
+        //this is a request to return all the settings parameters
+        //to the GUI. These will have to be packaged differently to the
+        Serial.print("S ");
+        Serial.print(_pulsePerRev);
+        Serial.print(" ");
+        Serial.print(_rpmFilterDepth);
+        Serial.print(" ");
+        Serial.println(_loopInterval);
+      }
+      else if(commandChar=='T')
+      {
+        //This is a test mode.  It will mirror the behaviour of having
+        //a constantly turning encoder shaft to excericse the PC software.
+        Serial.println("Test Mode");
+        _testMode = true;
+      }
+      else if(commandChar=='N')
+      {
+        //back to normal mode, if we have been in test mode.
+        Serial.println("Normal operating mode");
+        _testMode = false;
+      }
+    }
+
+    //Check to see if we are in test mode.  If we are, then we'll need to 
+    //manually increment the encoder count here.  No need to worry about
+    //rollover, the Encoder library takes care of that.
+    if(_testMode)
+    {
+      _encoder.setCount(_encoder.getCount() + 10);
     }
 
     //Right, now to the meat and potatoes.
     //Get the current count from the encoder library.
     long newPos = _encoder.getCount();
+    
     //Convert this to an angle.  We know that on our encoder we are seeing
     //1200 edges (qudrature).  Make this better in the future, as hard
     //coding this value is not cool.
@@ -232,19 +302,31 @@ void loop(){
     if (pos != newPos) 
     {
       //It is!  Fab, the thing is still spinning.
-
-      //Now we can calcualte the RPM from the number of pulses that have happened
-      //since the last loop, and the usual rpm formula...
-      long newRpm = ((newPos - pos / _loopInterval * 60*10*10) / _pulsePerRev);
+      long newRpm = 0;
+      //Lets check to see if we have just done a reset before this loop.
+      if(_justReset)
+      {
+        //aha.  We have.  So we dont scare the user, we'll quietly zero the 
+        //global rpm, so that it doesnt spike to something silly...
+        rpm = 0;
+        pos = 0;
+        //and then reset the flag.
+        _justReset = false;
+        Serial.println("Here");
+      }
+      
+      //Now we can use the pulse delta, to calculate the new rpm...
+      newRpm = ((newPos - pos) * (1000 / _loopInterval) * 60) / _pulsePerRev;
 
       //...and run that through the inlince filter at the filter depth requested.
       rpm = ((rpm * _rpmFilterDepth) + newRpm) / (_rpmFilterDepth + 1);
-    
+
       //oh, and just lift the LED pin high, so that it glows when the 
       //encoder spins.
       digitalWrite(LED_BUILTIN, HIGH); 
 
       //Write the values out..
+      Serial.print("D ");
       Serial.print(newAng);
       Serial.print(" ");
       Serial.print(newPos);
