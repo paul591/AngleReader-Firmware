@@ -134,7 +134,7 @@ void loop(){
       //Get the full string up until the null terminator
       String incomingString = Serial.readString();
       //echo it back for debug
-      Serial.println(incomingString);
+      //Serial.println(incomingString);
       //if its not zero length, then we can get the
       //command characeter...
       if(incomingString.length() > 0)
