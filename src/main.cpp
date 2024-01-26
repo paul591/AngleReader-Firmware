@@ -312,7 +312,6 @@ void loop(){
         pos = 0;
         //and then reset the flag.
         _justReset = false;
-        Serial.println("Here");
       }
       
       //Now we can use the pulse delta, to calculate the new rpm...
