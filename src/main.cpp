@@ -158,12 +158,12 @@ void loop(){
           Serial.println("Received Reset Command");
 
           //Yes it is! Reset the encoder count.
-          if(parameter.length() > 0)
+          if(parameter.length() == 0)
           {
             //we have an angle, to use as the reset value, so now
             //we need to do some math.
             
-            long resetAngle = parameter.toInt();
+            long resetAngle = 270;//parameter.toInt();
             long resetPos = (long)resetAngle * (((float)_pulsePerRev) / 360.0f);
             
             //Dump this text to the serial port to see the results.
